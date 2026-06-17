@@ -5,6 +5,7 @@ from market_data import X_test,X_train, X_valid, y_train, y_valid, y_test
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
+import matplotlib.pyplot as plt
 
 window = 20
 n_features = 25
@@ -56,11 +57,11 @@ class HedgeEnv(gym.Env):
             self.obs = self.update_obs()
         return self.obs.numpy(), reward,  terminated, False, {}
 
-env = HedgeEnv(window,n_features,X_train,y_train,a_max)
+"""env = HedgeEnv(window,n_features,X_train,y_train,a_max)
 policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
 model = PPO("MlpPolicy",env,tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
 model.learn(total_timesteps=1_000_000,tb_log_name="hedging")
-model.save("hedging")
+model.save("hedging")"""
 model = PPO.load("hedging")
 class HedgeEnvEval(HedgeEnv):
     def reset(self, seed=None, options=None):
@@ -104,8 +105,27 @@ cagr = equity[-1] ** (1 / years) - 1
 actions = np.array(actions)
 turnover = np.mean(np.abs(np.diff(actions)))
 print(f"Sharpe ratio: {sharpe} ; Sortino : {sortino} ; Maximum Drawdown: {max_drawdown} ; CAGR: {cagr} ; Turnover: {turnover}")
+# Buy and hold equivalent
+bh_returns = y_test.numpy()  # raw forward returns, unhedged
+bh_sharpe = np.sqrt(252) * bh_returns.mean() / (bh_returns.std() + 1e-8)
+print("Buy & hold Sharpe (test):", bh_sharpe)
 
+plt.figure(figsize=(12,4))
+plt.plot(actions)
+plt.title("Action / hedge ratio over test period")
+plt.show()
 
+plt.figure(figsize=(12,4))
+plt.plot(np.cumprod(1+r))
+plt.title("Equity curve, test period")
+plt.show()
+
+feature_names = ["rv_21", "rv_30", "rv_91", "term_str", "vix", "vix3m", "skew", "tnx","SPY_ret_5d","SPY_ret_10d","SPY_ret_20d","SMA_10","SMA_50","trend","VIX_change","VIX_ma5","VIX_slope","VIX_ma20","zscore_20","realized_vol_change",
+                      "vix_vol","lag_1","lag_2","lag_5","max_dd_20"]
+for i, name in enumerate(feature_names):
+    print(f"{name}: train mean={X_train[:,i].mean():.2f} std={X_train[:,i].std():.2f} | "
+          f"test mean={X_test[:,i].mean():.2f} std={X_test[:,i].std():.2f} | "
+          f"test max={X_test[:,i].max():.2f} test min={X_test[:,i].min():.2f}")
 
 
 
