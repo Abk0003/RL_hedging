@@ -11,7 +11,7 @@ window = 20
 n_features = 25
 a_max = 1.0
 class HedgeEnv(gym.Env):
-    def __init__(self,window,n_features,features,y,a_max,lam=0,psi=1e-4,phi=0):
+    def __init__(self,window,n_features,features,y,a_max,lam=0,psi=1e-4,phi=0.0002):
         super().__init__()
         self.window = window
         self.n_features = n_features
@@ -50,17 +50,16 @@ class HedgeEnv(gym.Env):
         self.prev_action = action
         ct = self.phi*abs(trade) + 0.5*self.psi*trade**2
         reward = action*self.y[self.t] - ct - self.lam*trade*action
-        reward *= 1e4
         terminated = self.t >= self.episode_end
         if not terminated:
             self.t += 1
             self.obs = self.update_obs()
-        return self.obs.numpy(), reward,  terminated, False, {}
+        return self.obs.numpy(), reward * 1e4,  terminated, False, {}
 
 """env = HedgeEnv(window,n_features,X_train,y_train,a_max)
 policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
-model = PPO("MlpPolicy",env,tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
-model.learn(total_timesteps=500_000,tb_log_name="hedging")
+model = PPO("MlpPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
+model.learn(total_timesteps=1_000_000,tb_log_name="hedging")
 model.save("hedging")"""
 model = PPO.load("hedging")
 class HedgeEnvEval(HedgeEnv):
