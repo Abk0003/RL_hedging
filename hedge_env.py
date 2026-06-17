@@ -25,7 +25,7 @@ class HedgeEnv(gym.Env):
         self.phi = phi
         self.a_max = a_max
         self.action_space = spaces.Box(low=-a_max,high=a_max,shape=(1,),dtype=np.float32)
-        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(500,),dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(460,),dtype=np.float32)
         self.episode_length = 252
         self.episode_end = None
     def update_obs(self):
@@ -60,7 +60,7 @@ class HedgeEnv(gym.Env):
 """env = HedgeEnv(window,n_features,X_train,y_train,a_max)
 policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
 model = PPO("MlpPolicy",env,tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
-model.learn(total_timesteps=1_000_000,tb_log_name="hedging")
+model.learn(total_timesteps=500_000,tb_log_name="hedging")
 model.save("hedging")"""
 model = PPO.load("hedging")
 class HedgeEnvEval(HedgeEnv):
@@ -120,14 +120,27 @@ plt.plot(np.cumprod(1+r))
 plt.title("Equity curve, test period")
 plt.show()
 
-feature_names = ["rv_21", "rv_30", "rv_91", "term_str", "vix", "vix3m", "skew", "tnx","SPY_ret_5d","SPY_ret_10d","SPY_ret_20d","SMA_10","SMA_50","trend","VIX_change","VIX_ma5","VIX_slope","VIX_ma20","zscore_20","realized_vol_change",
-                      "vix_vol","lag_1","lag_2","lag_5","max_dd_20"]
-for i, name in enumerate(feature_names):
-    print(f"{name}: train mean={X_train[:,i].mean():.2f} std={X_train[:,i].std():.2f} | "
-          f"test mean={X_test[:,i].mean():.2f} std={X_test[:,i].std():.2f} | "
-          f"test max={X_test[:,i].max():.2f} test min={X_test[:,i].min():.2f}")
+actions = np.array(actions)
+y_test_realized = y_test.numpy()[:len(actions)]  # align lengths
+corr = np.corrcoef(actions, y_test_realized)[0,1]
+print("Correlation(action, forward return):", corr)
 
+import matplotlib.pyplot as plt
 
+plt.scatter(actions, y_test_realized, alpha=0.4, s=10)
+plt.xlabel("action")
+plt.ylabel("forward return")
+plt.title("Action vs forward return, test period")
+plt.axhline(0, color='gray', lw=0.5)
+plt.axvline(0, color='gray', lw=0.5)
+plt.show()
+
+from scipy.stats import spearmanr
+ic_spearman, _ = spearmanr(actions, y_test_realized)
+print("Spearman IC:", ic_spearman)
+
+gross_pnl = actions * y_test_realized
+print("Gross Sharpe (no costs):", np.sqrt(252) * gross_pnl.mean() / (gross_pnl.std() + 1e-8))
 
 
 

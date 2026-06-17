@@ -1,6 +1,11 @@
-import torch
+import yfinance as yf
+import numpy as np
+import pandas as pd
 
-print(torch.__version__)
-print(torch.cuda.is_available())
-print(torch.version.cuda)
-print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+SKW = yf.download("^SKEW", start="2005-01-01", end="2025-12-31")
+skew = SKW["Close"]
+
+import matplotlib.pyplot as plt
+plt.plot(skew)
+plt.title("Raw CBOE SKEW index, full history")
+plt.show()
