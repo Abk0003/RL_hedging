@@ -59,7 +59,7 @@ class HedgeEnv(gym.Env):
 env = HedgeEnv(window,n_features,X_train,y_train,a_max)
 policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
 model = PPO("MlpPolicy",env,tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
-model.learn(total_timesteps=500_000,tb_log_name="hedging")
+model.learn(total_timesteps=1_000_000,tb_log_name="hedging")
 model.save("hedging")
 model = PPO.load("hedging")
 class HedgeEnvEval(HedgeEnv):
@@ -81,7 +81,7 @@ class HedgeEnvEval(HedgeEnv):
             self.t += 1
             self.obs = self.update_obs()
         return self.obs.numpy(), reward, terminated, False, {}
-test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
+test_env = HedgeEnvEval(window, n_features, X_test, y_test, a_max)
 obs, _ = test_env.reset()
 done = False
 rewards, actions = [], []

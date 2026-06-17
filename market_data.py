@@ -5,11 +5,11 @@ import math
 import torch
 from torch.fx.experimental.migrate_gradual_types.constraint_transformation import valid_index
 
-SPY = yf.download("SPY", start="2005-01-01", end="2024-12-31")
-VIX = yf.download("^VIX", start="2005-01-01", end="2024-12-31")
-TNX = yf.download("^TNX", start="2005-01-01", end="2024-12-31")
-VIX3M = yf.download("^VIX3M", start="2005-01-01", end="2024-12-31")
-SKW = yf.download("^SKEW", start="2005-01-01", end="2024-12-31")
+SPY = yf.download("SPY", start="2005-01-01", end="2025-12-31")
+VIX = yf.download("^VIX", start="2005-01-01", end="2025-12-31")
+TNX = yf.download("^TNX", start="2005-01-01", end="2025-12-31")
+VIX3M = yf.download("^VIX3M", start="2005-01-01", end="2025-12-31")
+SKW = yf.download("^SKEW", start="2005-01-01", end="2025-12-31")
 
 SPY_returns = np.log(SPY["Close"] / SPY["Close"].shift(1))
 
@@ -75,8 +75,8 @@ data = pd.concat([features, ret_fwd], axis=1).dropna()
 features = data.iloc[:, :-1]
 ret_fwd = data.iloc[:, -1]
 
-train_end = "2017-12-31"
-val_end = "2020-01-01"
+train_end = "2021-12-31"
+val_end = "2023-01-01"
 
 train_idx = features.index < train_end
 valid_idx = (features.index >= train_end) & (features.index < val_end)
