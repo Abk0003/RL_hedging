@@ -30,13 +30,16 @@ trend = SMA_10 / SMA_50 - 1
 VIX_change = VIX["Close"].pct_change()
 VIX_ma5 = VIX["Close"].rolling(5).mean()
 VIX_ma20 = VIX["Close"].rolling(20).mean()
-VIX_slope = VIX_ma5 - VIX_ma20
+VIX_slope = pd.DataFrame({"VIX_slope": VIX_ma5.squeeze() - VIX_ma20.squeeze()})
 zscore_20 = (SPY["Close"] - SPY["Close"].rolling(20).mean()) / SPY["Close"].rolling(20).std()
 realized_vol_change = rv_21.pct_change()
 vix_vol = VIX["Close"].rolling(10).std()
 lag_1 = SPY_returns.shift(1)
 lag_2 = SPY_returns.shift(2)
 lag_5 = SPY_returns.shift(5)
+rolling_max = SPY["Close"].cummax()
+drawdown = SPY["Close"] / rolling_max - 1
+max_dd_20 = drawdown.rolling(20).min()
 ret_fwd = ((SPY["Close"].shift(-1) - SPY["Close"])/SPY["Close"])
 
 rv_21.columns = ["rv21"]
@@ -47,16 +50,26 @@ vix.columns = ["vix"]
 vix3m.columns = ["vix3m"]
 skew.columns = ["skew"]
 tnx.columns = ["tnx"]
+SPY_ret_5d.columns = ["SPY_ret_5d"]
+SPY_ret_10d.columns = ["SPY_ret_10d"]
+SPY_ret_20d.columns = ["SPY_ret_20d"]
+SMA_10.columns = ["SMA_10d"]
+SMA_50.columns = ["SMA_50d"]
+trend.columns = ["trend"]
+VIX_change.columns = ["VIX_change"]
+VIX_ma5.columns = ["VIX_ma5"]
+VIX_ma20.columns = ["VIX_ma20"]
+VIX_slope.columns = ["VIX_slope"]
+zscore_20.columns = ["zscore_20"]
+realized_vol_change.columns = ["realized_vol_change"]
+vix_vol.columns = ["vix_vol"]
 lag_1.columns = ["lag_1"]
 lag_2.columns = ["lag_2"]
 lag_5.columns = ["lag_5"]
-vix_vol.columns = ["vix_vol"]
-realized_vol_change.columns = ["realized_vol_change"]
-zscore_20.columns = ["zscore_20"]
+max_dd_20.columns = ["max_dd_20"]
 
-
-
-features = pd.concat([rv_21, rv_30, rv_91, term_str, vix, vix3m, skew, tnx],axis=1)
+features = pd.concat([rv_21, rv_30, rv_91, term_str, vix, vix3m, skew, tnx,SPY_ret_5d,SPY_ret_10d,SPY_ret_20d,SMA_10,SMA_50,trend,VIX_change,VIX_ma5,VIX_slope,VIX_ma20,zscore_20,realized_vol_change,
+                      vix_vol,lag_1,lag_2,lag_5,max_dd_20],axis=1)
 
 data = pd.concat([features, ret_fwd], axis=1).dropna()
 features = data.iloc[:, :-1]

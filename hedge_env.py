@@ -7,7 +7,7 @@ from gymnasium import spaces
 from stable_baselines3 import PPO
 
 window = 20
-n_features = 8
+n_features = 25
 a_max = 1.0
 class HedgeEnv(gym.Env):
     def __init__(self,window,n_features,features,y,a_max,lam=0,psi=1e-4,phi=0):
@@ -24,7 +24,7 @@ class HedgeEnv(gym.Env):
         self.phi = phi
         self.a_max = a_max
         self.action_space = spaces.Box(low=-a_max,high=a_max,shape=(1,),dtype=np.float32)
-        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(160,),dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(500,),dtype=np.float32)
         self.episode_length = 252
         self.episode_end = None
     def update_obs(self):
@@ -33,7 +33,6 @@ class HedgeEnv(gym.Env):
         return self.obs
 
     def reset(self, seed=None, options=None):
-        print(f"len(y): {len(self.y)}, window: {self.window}, episode_length: {self.episode_length}, max_start: {len(self.y) - self.episode_length - 1}")
         super().reset(seed=seed)
         self.prev_action = 0.0
 
@@ -57,11 +56,11 @@ class HedgeEnv(gym.Env):
             self.obs = self.update_obs()
         return self.obs.numpy(), reward,  terminated, False, {}
 
-#env = HedgeEnv(window,n_features,X_train,y_train,a_max)
-#policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
-#model = PPO("MlpPolicy",env,tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
-#model.learn(total_timesteps=500_000,tb_log_name="hedging")
-#model.save("hedging")
+env = HedgeEnv(window,n_features,X_train,y_train,a_max)
+policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
+model = PPO("MlpPolicy",env,tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
+model.learn(total_timesteps=500_000,tb_log_name="hedging")
+model.save("hedging")
 model = PPO.load("hedging")
 class HedgeEnvEval(HedgeEnv):
     def reset(self, seed=None, options=None):
