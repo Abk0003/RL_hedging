@@ -98,7 +98,7 @@ class HedgeEnvEval(HedgeEnv):
         terminated = self.t >= len(self.y) - 1
         return obs, period_rew, terminated, False, {}
 
-test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
+test_env = HedgeEnvEval(window, n_features, X_test, y_test, a_max)
 obs, _ = test_env.reset()
 done = False
 rewards, actions = [], []
@@ -140,7 +140,7 @@ plt.savefig("equity.png")
 plt.show()
 
 actions = np.array(actions)
-y_test_realized = y_valid.numpy()[window - 1: window - 1 + len(actions)]
+y_test_realized = y_test.numpy()[window - 1: window - 1 + len(actions)]
 corr = np.corrcoef(actions, y_test_realized)[0,1]
 print("Correlation(action, forward return):", corr)
 

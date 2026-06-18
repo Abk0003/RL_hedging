@@ -4,6 +4,8 @@ import pandas as pd
 import torch
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 ROLL_WINDOW = 504
 MIN_PERIODS = 252
@@ -92,17 +94,12 @@ feature_dict = {"rv21": rv21_z,"rv30": rv30_z,"rv91": rv91_z,"term_str": term_z,
 
 features = pd.concat(feature_dict.values(), axis=1)
 features.columns = list(feature_dict.keys())
-matrix = features.corr(method="pearson")
-sns.heatmap(matrix, annot=False, cmap="coolwarm",vmin=-1,vmax=1)
-plt.title('Correlation Matrix Heatmap')
-plt.show()
-
 data = pd.concat([features, ret_fwd.rename("ret_fwd")], axis=1).dropna()
 features = data.iloc[:, :-1]
 ret_fwd = data.iloc[:, -1]
 
-train_end = "2021-12-31"
-val_end = "2023-01-01"
+train_end = "2017-12-31"
+val_end = "2021-01-01"
 
 train_idx = features.index < train_end
 valid_idx = (features.index >= train_end) & (features.index < val_end)
