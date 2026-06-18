@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 window = 20
 n_features = 23
 a_max = 2.0
-rebalance_freq = 25
+rebalance_freq = 5
 class HedgeEnv(gym.Env):
     def __init__(self,window,n_features,features,y,a_max,lam=0,psi=1e-4,phi=0.0002):
         super().__init__()
@@ -26,15 +26,15 @@ class HedgeEnv(gym.Env):
         self.phi = phi
         self.a_max = a_max
         self.action_space = spaces.Box(low=-a_max,high=a_max,shape=(1,),dtype=np.float32)
-        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(window*n_features+1,),dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(window,n_features+1),dtype=np.float32)
         self.episode_length = 252
         self.episode_end = None
         self.rebalance_freq = rebalance_freq
         self.days_held = 0
     def update_obs(self):
-        self.obs = self.features[self.t-self.window+1:self.t+1].reshape(-1)
-        current_pos = torch.tensor([self.prev_action],dtype=torch.float32)
-        self.obs = torch.concat([self.obs,current_pos])
+        self.obs = self.features[self.t-self.window+1:self.t+1].clone()
+        act = torch.full((self.window,1),self.prev_action,dtype=torch.float32)
+        self.obs = torch.concat([self.obs,act],dim=1)
         return self.obs
 
     def reset(self, seed=None, options=None):
@@ -48,60 +48,66 @@ class HedgeEnv(gym.Env):
         self.obs = self.update_obs()
 
         return self.obs.numpy(), {}
-    def step(self,action):
-        if self.days_held % self.rebalance_freq != 0:
-            action = self.prev_action
-        else:
-            action = np.clip(action.item(), -self.a_max, self.a_max)
+    def step(self, action):
+        action = np.clip(action.item(), -self.a_max, self.a_max)
         trade = action - self.prev_action
-        self.prev_action = action
         ct = self.phi*abs(trade) + 0.5*self.psi*trade**2
-        reward = action*self.y[self.t] - ct - self.lam*trade*action
-        terminated = self.t >= self.episode_end
-        if not terminated:
-            self.days_held += 1
+        lev = 0.001*action**2
+        reward = - ct - self.lam*trade*action-lev
+        for _ in range(self.rebalance_freq):
+            reward += action * self.y[self.t].item()
             self.t += 1
-            self.obs = self.update_obs()
-        return self.obs.numpy(), reward * 1e4,  terminated, False, {}
+            if self.t >= self.episode_end:
+                break
+        self.prev_action = action
+        terminated = self.t >= len(self.y) - 1
+        self.obs = self.update_obs()
+        return self.obs.numpy(), reward * 1e4, terminated, False, {}
 
-env = HedgeEnv(window,n_features,X_train,y_train,a_max)
-policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
-model = RecurrentPPO("MlpLstmPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
-model.learn(total_timesteps=750_000,tb_log_name="hedging")
-model.save("hedging")
-model = RecurrentPPO.load("hedging")
+"""env = HedgeEnv(window,n_features,X_train,y_train,a_max)
+policy_kwargs = dict(lstm_hidden_size=64,n_lstm_layers=1,net_arch=dict(vf=[64],pf=[64]))
+model = RecurrentPPO("MlpLstmPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64,ent_coef=0.01)
+model.learn(total_timesteps=50_000,tb_log_name="lstm_hedging")
+model.save("lstm_hedging")"""
+model = RecurrentPPO.load("lstm_hedging")
 class HedgeEnvEval(HedgeEnv):
     def reset(self, seed=None, options=None):
         super(HedgeEnv, self).reset(seed=seed)
         self.t = self.window - 1
         self.prev_action = 0.0
         self.obs = self.update_obs()
-        return self.obs.numpy(), {}
+        return self.obs, {}
 
     def step(self, action):
-        if self.days_held % self.rebalance_freq != 0:
-            action = self.prev_action
-        else:
-            action = np.clip(action.item(), -self.a_max, self.a_max)
+        action = np.clip(action.item(), -self.a_max, self.a_max)
         trade = action - self.prev_action
-        self.prev_action = action
-        ct = self.phi*abs(trade) + 0.5*self.psi*trade**2
-        reward = action*self.y[self.t] - ct - self.lam*trade*action
-        terminated = self.t >= len(self.y) - 1
-        if not terminated:
-            self.days_held += 1
+        ct = self.phi * abs(trade) + 0.5*self.psi*trade**2 + self.lam * action * trade
+        period_rew = []
+        pen_paid = False
+        for _ in range(self.rebalance_freq):
+            if self.t >= len(self.y) - 1:
+                break
+            day_ct = ct if not pen_paid else 0.0
+            day_lam = (self.lam * trade * action) if not pen_paid else 0.0
+            pen_paid = True
+            day_reward = (action * self.y[self.t].item()) - day_ct - day_lam
+            period_rew.append(day_reward)
             self.t += 1
-            self.obs = self.update_obs()
-        return self.obs.numpy(), reward, terminated, False, {}
-test_env = HedgeEnvEval(window, n_features, X_test, y_test , a_max)
+        self.prev_action = action
+        obs = self.update_obs()
+        terminated = self.t >= len(self.y) - 1
+        return obs, period_rew, terminated, False, {}
+
+test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
 obs, _ = test_env.reset()
 done = False
 rewards, actions = [], []
+lstm_states = None
 while not done:
-    action, _ = model.predict(obs, deterministic=True)
+    action, lstm_states = model.predict(obs,state=lstm_states, deterministic=True)
     obs, reward, done, _, _ = test_env.step(action)
-    rewards.append(reward)
-    actions.append(test_env.prev_action)
+    rewards.extend(reward)
+    actions.extend([test_env.prev_action]*len(reward))
 
 r = np.array(rewards)
 sharpe = np.sqrt(252) * r.mean() / (r.std() + 1e-8)
@@ -134,7 +140,7 @@ plt.savefig("equity.png")
 plt.show()
 
 actions = np.array(actions)
-y_test_realized = y_test.numpy()[window - 1: window - 1 + len(actions)] # align lengths
+y_test_realized = y_valid.numpy()[window - 1: window - 1 + len(actions)] # align lengths
 corr = np.corrcoef(actions, y_test_realized)[0,1]
 print("Correlation(action, forward return):", corr)
 
