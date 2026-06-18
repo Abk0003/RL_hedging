@@ -52,7 +52,7 @@ class HedgeEnv(gym.Env):
         action = np.clip(action.item(), -self.a_max, self.a_max)
         trade = action - self.prev_action
         ct = self.phi*abs(trade) + 0.5*self.psi*trade**2
-        lev = 0.0001*action**2
+        lev = 0.00005*action**2
         reward = - ct - self.lam*trade*action-lev
         for _ in range(self.rebalance_freq):
             reward += action * self.y[self.t].item()
@@ -64,11 +64,11 @@ class HedgeEnv(gym.Env):
         self.obs = self.update_obs()
         return self.obs.numpy(), reward * 1e4, terminated, False, {}
 
-env = HedgeEnv(window,n_features,X_train,y_train,a_max)
+"""env = HedgeEnv(window,n_features,X_train,y_train,a_max)
 policy_kwargs = dict(lstm_hidden_size=64,n_lstm_layers=1,net_arch=dict(vf=[64],pf=[64]))
 model = RecurrentPPO("MlpLstmPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64,ent_coef=0.01)
 model.learn(total_timesteps=75_000,tb_log_name="lstm_hedging")
-model.save("lstm_hedging")
+model.save("lstm_hedging")"""
 model = RecurrentPPO.load("lstm_hedging")
 class HedgeEnvEval(HedgeEnv):
     def reset(self, seed=None, options=None):
@@ -98,7 +98,7 @@ class HedgeEnvEval(HedgeEnv):
         terminated = self.t >= len(self.y) - 1
         return obs, period_rew, terminated, False, {}
 
-test_env = HedgeEnvEval(window, n_features, X_test, y_test, a_max)
+test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
 obs, _ = test_env.reset()
 done = False
 rewards, actions = [], []
@@ -140,7 +140,7 @@ plt.savefig("equity.png")
 plt.show()
 
 actions = np.array(actions)
-y_test_realized = y_test.numpy()[window - 1: window - 1 + len(actions)] # align lengths
+y_test_realized = y_valid.numpy()[window - 1: window - 1 + len(actions)]
 corr = np.corrcoef(actions, y_test_realized)[0,1]
 print("Correlation(action, forward return):", corr)
 
