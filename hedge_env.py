@@ -8,8 +8,9 @@ from stable_baselines3 import PPO
 import matplotlib.pyplot as plt
 
 window = 20
-n_features = 25
-a_max = 1.0
+n_features = 23
+a_max = 2.0
+rebalance_freq = 25
 class HedgeEnv(gym.Env):
     def __init__(self,window,n_features,features,y,a_max,lam=0,psi=1e-4,phi=0.0002):
         super().__init__()
@@ -28,16 +29,18 @@ class HedgeEnv(gym.Env):
         self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(window*n_features+1,),dtype=np.float32)
         self.episode_length = 252
         self.episode_end = None
+        self.rebalance_freq = rebalance_freq
+        self.days_held = 0
     def update_obs(self):
         self.obs = self.features[self.t-self.window+1:self.t+1].reshape(-1)
-        current_pos = torch.tensor(self.prev_action,dtype=torch.float32)
+        current_pos = torch.tensor([self.prev_action],dtype=torch.float32)
         self.obs = torch.concat([self.obs,current_pos])
         return self.obs
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.prev_action = 0.0
-
+        self.days_held = 0
         max_start = len(self.y) - self.episode_length
         self.t = np.random.randint(self.window, max_start)
 
@@ -46,7 +49,10 @@ class HedgeEnv(gym.Env):
 
         return self.obs.numpy(), {}
     def step(self,action):
-        action = np.clip(action.item(), -self.a_max, self.a_max)
+        if self.days_held % self.rebalance_freq != 0:
+            action = self.prev_action
+        else:
+            action = np.clip(action.item(), -self.a_max, self.a_max)
         trade = action - self.prev_action
         self.prev_action = action
         ct = self.phi*abs(trade) + 0.5*self.psi*trade**2
@@ -57,11 +63,11 @@ class HedgeEnv(gym.Env):
             self.obs = self.update_obs()
         return self.obs.numpy(), reward * 1e4,  terminated, False, {}
 
-env = HedgeEnv(window,n_features,X_train,y_train,a_max)
+"""env = HedgeEnv(window,n_features,X_train,y_train,a_max)
 policy_kwargs = dict(net_arch = dict(pi=[256,256],vf=[256,256]))
 model = PPO("MlpPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64)
-model.learn(total_timesteps=1_000_000,tb_log_name="hedging")
-model.save("hedging")
+model.learn(total_timesteps=750_000,tb_log_name="hedging")
+model.save("hedging")"""
 model = PPO.load("hedging")
 class HedgeEnvEval(HedgeEnv):
     def reset(self, seed=None, options=None):
@@ -82,7 +88,7 @@ class HedgeEnvEval(HedgeEnv):
             self.t += 1
             self.obs = self.update_obs()
         return self.obs.numpy(), reward, terminated, False, {}
-test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
+test_env = HedgeEnvEval(window, n_features, X_valid, y_valid , a_max)
 obs, _ = test_env.reset()
 done = False
 rewards, actions = [], []
@@ -113,11 +119,13 @@ print("Buy & hold Sharpe (test):", bh_sharpe)
 plt.figure(figsize=(12,4))
 plt.plot(actions)
 plt.title("Action / hedge ratio over test period")
+plt.savefig("action_hedge.png")
 plt.show()
 
 plt.figure(figsize=(12,4))
 plt.plot(np.cumprod(1+r))
 plt.title("Equity curve, test period")
+plt.savefig("equity.png")
 plt.show()
 
 actions = np.array(actions)
@@ -133,6 +141,7 @@ plt.ylabel("forward return")
 plt.title("Action vs forward return, test period")
 plt.axhline(0, color='gray', lw=0.5)
 plt.axvline(0, color='gray', lw=0.5)
+plt.savefig("action_vs_forward_return.png")
 plt.show()
 
 from scipy.stats import spearmanr
