@@ -31,6 +31,7 @@ class HedgeEnv(gym.Env):
         self.episode_end = None
         self.rebalance_freq = rebalance_freq
         self.days_held = 0
+        self.buffer = []
     def update_obs(self):
         self.obs = self.features[self.t-self.window+1:self.t+1].reshape(-1)
         current_pos = torch.tensor([self.prev_action],dtype=torch.float32)
@@ -43,7 +44,7 @@ class HedgeEnv(gym.Env):
         self.days_held = 0
         max_start = len(self.y) - self.episode_length
         self.t = np.random.randint(self.window, max_start)
-
+        self.buffer = []
         self.episode_end = self.t + self.episode_length
         self.obs = self.update_obs()
 
@@ -51,7 +52,11 @@ class HedgeEnv(gym.Env):
     def step(self, action):
         action = np.clip(action.item(), -self.a_max, self.a_max)
         trade = action - self.prev_action
-        ct = self.phi*abs(trade) + 0.5*self.psi*trade**2
+        r = np.array(self.buffer)
+        equity = np.cumprod(1+r)
+        peak = np.maximum.accumulate(equity)
+        drawdown = (equity-peak)/peak
+        ct = (1-drawdown*10) * (self.phi*abs(trade) + 0.5*self.psi*trade**2)
         reward = - ct - self.lam*trade*action
         for _ in range(self.rebalance_freq):
             reward += action * self.y[self.t].item()
@@ -59,6 +64,7 @@ class HedgeEnv(gym.Env):
             if self.t >= self.episode_end:
                 break
         self.prev_action = action
+        self.buffer.append(reward)
         terminated = self.t >= len(self.y) - 1
         self.obs = self.update_obs()
         return self.obs.numpy(), reward * 1e4, terminated, False, {}

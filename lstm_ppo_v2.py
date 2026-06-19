@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 import matplotlib.pyplot as plt
 
 from market_data import X_test, X_train, X_valid, y_train, y_valid, y_test
@@ -23,20 +23,19 @@ DD_COST_SENSITIVITY = 10.0   # steepness: multiplier = 1 + sensitivity * |drawdo
 
 class HedgeEnv(gym.Env):
     """
-    PPO hedging environment with:
+    RecurrentPPO (MlpLstmPolicy) hedging environment.
 
-    1. Running drawdown tracked as scalars (no recomputation from scratch each step).
-    2. Asymmetric transaction cost: cost multiplier rises linearly with drawdown
-       depth, clamped to [DD_COST_MIN, DD_COST_MAX].
-    3. CVaR penalty on the tail of the step-reward buffer (episode-scoped,
-       so no cross-episode contamination).
-    4. Current drawdown exposed as an extra observation feature so the policy
-       can condition on the cost regime it's in.
+    Key differences from the flat MLP version:
+    - Observation shape is (n_features + 2,) per timestep, NOT flattened.
+      RecurrentPPO feeds one timestep at a time into the LSTM; the window
+      of history is encoded in the hidden state, not in the observation vector.
+    - prev_action and current_drawdown are appended as the two extra scalars.
 
-    Observation shape: (window * n_features) + 2
-      - flattened feature window
-      - prev_action scalar
-      - current_drawdown scalar  ← new
+    Reward shaping:
+    1. Asymmetric transaction cost: base cost scaled by a drawdown multiplier
+       clamped to [DD_COST_MIN, DD_COST_MAX].
+    2. CVaR penalty: mean of the worst CVAR_ALPHA fraction of episode rewards
+       subtracted at each step (weighted by CVAR_WEIGHT).
     """
 
     def __init__(self, window, n_features, features, y, a_max,
@@ -51,8 +50,8 @@ class HedgeEnv(gym.Env):
         self.psi         = psi
         self.phi         = phi
 
-        # +2: prev_action + current_drawdown
-        obs_dim = window * n_features + 2
+        # one timestep: n_features + prev_action + drawdown
+        obs_dim = n_features + 2
         self.action_space      = spaces.Box(low=-a_max, high=a_max,
                                             shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf,
@@ -63,52 +62,45 @@ class HedgeEnv(gym.Env):
         self.rebalance_freq = rebalance_freq
 
         # running state — reset every episode
-        self.t            = window - 1
-        self.prev_action  = 0.0
-        self.cum_reward   = 0.0       # tracks cumulative raw reward (unscaled)
-        self.peak_reward  = 0.0       # high-water mark of cum_reward
-        self.drawdown     = 0.0       # current drawdown ∈ (-∞, 0]
-        self.reward_buffer = []       # step rewards for CVaR (episode-scoped)
+        self.t             = window - 1
+        self.prev_action   = 0.0
+        self.cum_reward    = 0.0
+        self.peak_reward   = 0.0
+        self.drawdown      = 0.0
+        self.reward_buffer = []
 
     # ── internal helpers ───────────────────────────────────────────────────────
 
     def _update_drawdown(self, step_reward: float):
-        """Increment running equity and update drawdown scalar."""
+        """O(1) running drawdown update."""
         self.cum_reward  += step_reward
         self.peak_reward  = max(self.peak_reward, self.cum_reward)
         denom             = abs(self.peak_reward) + 1e-8
         self.drawdown     = (self.cum_reward - self.peak_reward) / denom
-        # drawdown ∈ (-∞, 0]
 
     def _cost_multiplier(self) -> float:
-        """
-        Linearly scale transaction cost with drawdown depth.
-        drawdown=0  → multiplier=1.0
-        drawdown=-0.2 → multiplier=3.0 before clamping → clamped to DD_COST_MAX
-        """
+        """1.0 at zero drawdown, linearly rising, clamped at DD_COST_MAX."""
         raw = DD_COST_MIN + DD_COST_SENSITIVITY * abs(self.drawdown)
         return float(np.clip(raw, DD_COST_MIN, DD_COST_MAX))
 
     def _cvar_penalty(self) -> float:
         """
-        CVaR at CVAR_ALPHA over the episode reward buffer.
-        Returns the mean of the bottom (CVAR_ALPHA * 100)% of step rewards,
-        as a non-negative penalty value (we subtract it from the reward).
-        Returns 0 if the buffer is too small to be meaningful.
+        Mean of the worst CVAR_ALPHA fraction of episode rewards so far.
+        Returns 0 during the warmup period (buffer too small).
         """
-        if len(self.reward_buffer) < max(10, int(1 / CVAR_ALPHA)):
+        min_samples = max(10, int(1 / CVAR_ALPHA))
+        if len(self.reward_buffer) < min_samples:
             return 0.0
-        arr      = np.array(self.reward_buffer)
-        cutoff   = int(np.floor(CVAR_ALPHA * len(arr)))
-        cutoff   = max(cutoff, 1)
-        tail     = np.sort(arr)[:cutoff]          # worst rewards
-        cvar_val = tail.mean()                     # negative number
-        return float(abs(cvar_val))               # return as positive penalty
+        arr     = np.array(self.reward_buffer)
+        cutoff  = max(1, int(np.floor(CVAR_ALPHA * len(arr))))
+        tail    = np.sort(arr)[:cutoff]
+        return float(abs(tail.mean()))
 
-    def update_obs(self) -> torch.Tensor:
-        flat    = self.features[self.t - self.window + 1 : self.t + 1].reshape(-1)
-        extras  = torch.tensor([self.prev_action, self.drawdown], dtype=torch.float32)
-        return torch.cat([flat, extras])
+    def update_obs(self) -> np.ndarray:
+        # single timestep slice: shape (n_features,)
+        feat    = self.features[self.t].numpy()                        # (n_features,)
+        extras  = np.array([self.prev_action, self.drawdown], dtype=np.float32)
+        return np.concatenate([feat, extras])                          # (n_features+2,)
 
     # ── gym interface ──────────────────────────────────────────────────────────
 
@@ -120,97 +112,85 @@ class HedgeEnv(gym.Env):
         self.drawdown      = 0.0
         self.reward_buffer = []
 
-        max_start    = len(self.y) - self.episode_length
-        self.t       = np.random.randint(self.window, max_start)
+        max_start        = len(self.y) - self.episode_length
+        self.t           = np.random.randint(self.window, max_start)
         self.episode_end = self.t + self.episode_length
 
-        obs = self.update_obs()
-        return obs.numpy(), {}
+        return self.update_obs(), {}
 
     def step(self, action):
-        action = float(np.clip(action.item(), -self.a_max, self.a_max))
-        trade  = action - self.prev_action
+        action  = float(np.clip(action.item(), -self.a_max, self.a_max))
+        trade   = action - self.prev_action
 
-        # ── asymmetric transaction cost ────────────────────────────────────────
-        base_ct  = self.phi * abs(trade) + 0.5 * self.psi * trade ** 2
-        ct       = self._cost_multiplier() * base_ct
+        # asymmetric transaction cost
+        base_ct = self.phi * abs(trade) + 0.5 * self.psi * trade ** 2
+        ct      = self._cost_multiplier() * base_ct
 
-        # ── base reward for this decision period ───────────────────────────────
-        reward = -ct - self.lam * trade * action
+        reward  = -ct - self.lam * trade * action
         for _ in range(self.rebalance_freq):
             reward += action * self.y[self.t].item()
             self.t += 1
             if self.t >= self.episode_end:
                 break
 
-        # ── update running drawdown (use unscaled reward) ──────────────────────
+        # update drawdown before appending to buffer
         self._update_drawdown(reward)
 
-        # ── CVaR penalty ───────────────────────────────────────────────────────
+        # CVaR penalty
         self.reward_buffer.append(reward)
-        cvar_pen = self._cvar_penalty()
-        reward  -= CVAR_WEIGHT * cvar_pen
+        reward -= CVAR_WEIGHT * self._cvar_penalty()
 
         self.prev_action = action
         terminated = self.t >= len(self.y) - 1
-        obs        = self.update_obs()
-        return obs.numpy(), reward * 1e4, terminated, False, {}
+        return self.update_obs(), reward * 1e4, terminated, False, {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Eval environment
-# Inherits all training logic; only changes: deterministic start + per-day rewards
 # ─────────────────────────────────────────────────────────────────────────────
 
 class HedgeEnvEval(HedgeEnv):
     """
-    Mirrors the training cost structure exactly so evaluation metrics
-    reflect what the policy was actually trained to optimise.
-
-    Returns a list of per-day rewards (for fine-grained analysis) rather
-    than a single period reward.
+    Deterministic start (t = window-1).
+    Returns per-day reward list so post-hoc analysis is granular.
+    Inherits the same cost structure as training.
     """
 
     def reset(self, seed=None, options=None):
-        gym.Env.reset(self, seed=seed)          # skip HedgeEnv.reset random start
+        gym.Env.reset(self, seed=seed)
         self.t             = self.window - 1
         self.prev_action   = 0.0
         self.cum_reward    = 0.0
         self.peak_reward   = 0.0
         self.drawdown      = 0.0
         self.reward_buffer = []
-        obs = self.update_obs()
-        return obs.numpy(), {}
+        return self.update_obs(), {}
 
     def step(self, action):
         action  = float(np.clip(action.item(), -self.a_max, self.a_max))
         trade   = action - self.prev_action
 
-        # same asymmetric cost as training
-        base_ct = self.phi * abs(trade) + 0.5 * self.psi * trade ** 2
-        ct      = self._cost_multiplier() * base_ct
+        base_ct  = self.phi * abs(trade) + 0.5 * self.psi * trade ** 2
+        ct       = self._cost_multiplier() * base_ct
 
         period_rew = []
         pen_paid   = False
-
         for _ in range(self.rebalance_freq):
             if self.t >= len(self.y) - 1:
                 break
-            day_ct  = ct if not pen_paid else 0.0
+            day_ct   = ct if not pen_paid else 0.0
             pen_paid = True
             day_rew  = (action * self.y[self.t].item()) - day_ct
             period_rew.append(day_rew)
             self.t  += 1
 
-        # keep running drawdown up to date during eval too
         if period_rew:
             self._update_drawdown(sum(period_rew))
             self.reward_buffer.extend(period_rew)
 
         self.prev_action = action
-        obs        = self.update_obs()
         terminated = self.t >= len(self.y) - 1
-        return obs, period_rew, terminated, False, {}
+        return self.update_obs(), period_rew, terminated, False, {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,32 +198,40 @@ class HedgeEnvEval(HedgeEnv):
 # ─────────────────────────────────────────────────────────────────────────────
 
 """env = HedgeEnv(window, n_features, X_train, y_train, a_max)
-policy_kwargs = dict(net_arch=dict(pi=[256, 256], vf=[256, 256]))
-model = PPO(
-    "MlpPolicy", env,
-    device="cpu",
-    tensorboard_log="./tensorboard/",
-    policy_kwargs=policy_kwargs,
-    verbose=1,
-    learning_rate=1e-4,
-    n_steps=4096,
-    gae_lambda=0.95,
-    batch_size=64,
+
+policy_kwargs = dict(
+    lstm_hidden_size = 128,
+    n_lstm_layers    = 1,
+    net_arch         = dict(pi=[128, 128], vf=[128, 128]),
 )
-model.learn(total_timesteps=500_000, tb_log_name="hedging")
-model.save("hedging")"""
+
+model = RecurrentPPO(
+    "MlpLstmPolicy",
+    env,
+    device            = "cpu",
+    tensorboard_log   = "./tensorboard/",
+    policy_kwargs     = policy_kwargs,
+    verbose           = 1,
+    learning_rate     = 1e-4,
+    n_steps           = 4096,
+    gae_lambda        = 0.95,
+    batch_size        = 64,
+    ent_coef          = 0.01,
+)
+model.learn(total_timesteps=50_000, tb_log_name="hedging_lstm")
+model.save("hedging_lstm")"""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Evaluation
 # ─────────────────────────────────────────────────────────────────────────────
 
-model    = PPO.load("hedging")
-test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
+model    = RecurrentPPO.load("hedging_lstm")
+test_env = HedgeEnvEval(window, n_features, X_test, y_test, a_max)
 obs, _   = test_env.reset()
 
-done, rewards, actions = False, [], []
+done, rewards, actions, lstm_states = False, [], [], None
 while not done:
-    action, _ = model.predict(obs, deterministic=True)
+    action, lstm_states = model.predict(obs, state=lstm_states, deterministic=True)
     obs, reward, done, _, _ = test_env.step(action)
     rewards.extend(reward)
     actions.extend([test_env.prev_action] * len(reward))
@@ -256,8 +244,8 @@ downside     = r[r < 0]
 sortino      = np.sqrt(252) * r.mean() / (downside.std() + 1e-8)
 equity       = np.cumprod(1 + r)
 peak         = np.maximum.accumulate(equity)
-drawdown     = (equity - peak) / peak
-max_drawdown = drawdown.min()
+drawdown_arr = (equity - peak) / peak
+max_drawdown = drawdown_arr.min()
 years        = len(r) / 252
 cagr         = equity[-1] ** (1 / years) - 1
 turnover     = np.mean(np.abs(np.diff(actions)))
@@ -265,8 +253,9 @@ turnover     = np.mean(np.abs(np.diff(actions)))
 print(f"Sharpe: {sharpe:.3f}  Sortino: {sortino:.3f}  "
       f"Max DD: {max_drawdown:.3f}  CAGR: {cagr:.3f}  Turnover: {turnover:.4f}")
 
-bh_returns = y_valid.numpy()
-print("Buy & hold Sharpe:", np.sqrt(252) * bh_returns.mean() / (bh_returns.std() + 1e-8))
+bh_returns = y_test.numpy()
+print("Buy & hold Sharpe:",
+      np.sqrt(252) * bh_returns.mean() / (bh_returns.std() + 1e-8))
 
 # ── plots ──────────────────────────────────────────────────────────────────────
 plt.figure(figsize=(12, 4))
@@ -281,7 +270,7 @@ plt.title("Equity curve, test period")
 plt.savefig("equity.png")
 plt.show()
 
-y_test_realized = y_valid.numpy()[window - 1 : window - 1 + len(actions)]
+y_test_realized = y_test.numpy()[window - 1 : window - 1 + len(actions)]
 corr = np.corrcoef(actions, y_test_realized)[0, 1]
 print("Correlation(action, forward return):", corr)
 
