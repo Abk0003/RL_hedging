@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 import numpy as np
-from market_data import X_test,X_train, X_valid, y_train, y_valid, y_test
+from market_data import X_test, X_train, X_valid, y_train, y_valid, y_test, VIX_ma5, VIX, ret_fwd
 import gymnasium as gym
 from gymnasium import spaces
 from sb3_contrib import RecurrentPPO
@@ -65,9 +65,11 @@ class HedgeEnv(gym.Env):
         return self.obs.numpy(), reward * 1e4, terminated, False, {}
 
 """env = HedgeEnv(window,n_features,X_train,y_train,a_max)
-policy_kwargs = dict(lstm_hidden_size=64,n_lstm_layers=1,net_arch=dict(vf=[64],pf=[64]))
-model = RecurrentPPO("MlpLstmPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64,ent_coef=0.01)
-model.learn(total_timesteps=75_000,tb_log_name="lstm_hedging")
+#policy_kwargs = dict(lstm_hidden_size=64,n_lstm_layers=1,net_arch=dict(vf=[64],pf=[64]))
+#model = RecurrentPPO("MlpLstmPolicy",env,device="cpu",tensorboard_log="./tensorboard/",policy_kwargs = policy_kwargs,verbose=1,learning_rate=1e-4,n_steps=4096,gae_lambda=0.95,batch_size=64,ent_coef=0.01)
+model = RecurrentPPO.load("lstm_hedging")
+model.set_env(env)
+model.learn(total_timesteps=75_000,reset_num_timesteps=False,tb_log_name="lstm_hedging")
 model.save("lstm_hedging")"""
 model = RecurrentPPO.load("lstm_hedging")
 class HedgeEnvEval(HedgeEnv):
