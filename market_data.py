@@ -107,6 +107,9 @@ train_idx = features.index < train_end
 valid_idx = (features.index >= train_end) & (features.index < val_end)
 test_idx = features.index >= val_end
 
+dates_valid = features[valid_idx].index
+dates_test = features[test_idx].index
+
 X_train = features[train_idx]
 X_valid = features[valid_idx]
 X_test = features[test_idx]

@@ -7,37 +7,20 @@ import matplotlib.pyplot as plt
 
 from market_data import X_test, X_train, X_valid, y_train, y_valid, y_test
 
-# ── global hyperparams ─────────────────────────────────────────────────────────
+
 window         = 20
 n_features     = 23
 a_max          = 2.0
 rebalance_freq = 5
 
-# ── CVaR / drawdown knobs ──────────────────────────────────────────────────────
-CVAR_ALPHA          = 0.10   # tail fraction: bottom 10% of step rewards
-CVAR_WEIGHT         = 0.20   # how much CVaR penalty is added to reward
-DD_COST_MIN         = 1.0    # multiplier at zero drawdown
-DD_COST_MAX         = 2.0    # multiplier cap (hit at ~20% drawdown)
-DD_COST_SENSITIVITY = 10.0   # steepness: multiplier = 1 + sensitivity * |drawdown|
+CVAR_ALPHA          = 0.10
+CVAR_WEIGHT         = 0.05
+DD_COST_MIN         = 1.0
+DD_COST_MAX         = 2.0
+DD_COST_SENSITIVITY = 5.0
 
 
 class HedgeEnv(gym.Env):
-    """
-    RecurrentPPO (MlpLstmPolicy) hedging environment.
-
-    Key differences from the flat MLP version:
-    - Observation shape is (n_features + 2,) per timestep, NOT flattened.
-      RecurrentPPO feeds one timestep at a time into the LSTM; the window
-      of history is encoded in the hidden state, not in the observation vector.
-    - prev_action and current_drawdown are appended as the two extra scalars.
-
-    Reward shaping:
-    1. Asymmetric transaction cost: base cost scaled by a drawdown multiplier
-       clamped to [DD_COST_MIN, DD_COST_MAX].
-    2. CVaR penalty: mean of the worst CVAR_ALPHA fraction of episode rewards
-       subtracted at each step (weighted by CVAR_WEIGHT).
-    """
-
     def __init__(self, window, n_features, features, y, a_max,
                  lam=0, psi=1e-4, phi=0.0002):
         super().__init__()
@@ -50,7 +33,7 @@ class HedgeEnv(gym.Env):
         self.psi         = psi
         self.phi         = phi
 
-        # one timestep: n_features + prev_action + drawdown
+
         obs_dim = n_features + 2
         self.action_space      = spaces.Box(low=-a_max, high=a_max,
                                             shape=(1,), dtype=np.float32)
@@ -69,25 +52,18 @@ class HedgeEnv(gym.Env):
         self.drawdown      = 0.0
         self.reward_buffer = []
 
-    # ── internal helpers ───────────────────────────────────────────────────────
 
     def _update_drawdown(self, step_reward: float):
-        """O(1) running drawdown update."""
         self.cum_reward  += step_reward
         self.peak_reward  = max(self.peak_reward, self.cum_reward)
         denom             = abs(self.peak_reward) + 1e-8
         self.drawdown     = (self.cum_reward - self.peak_reward) / denom
 
     def _cost_multiplier(self) -> float:
-        """1.0 at zero drawdown, linearly rising, clamped at DD_COST_MAX."""
         raw = DD_COST_MIN + DD_COST_SENSITIVITY * abs(self.drawdown)
         return float(np.clip(raw, DD_COST_MIN, DD_COST_MAX))
 
     def _cvar_penalty(self) -> float:
-        """
-        Mean of the worst CVAR_ALPHA fraction of episode rewards so far.
-        Returns 0 during the warmup period (buffer too small).
-        """
         min_samples = max(10, int(1 / CVAR_ALPHA))
         if len(self.reward_buffer) < min_samples:
             return 0.0
@@ -97,12 +73,10 @@ class HedgeEnv(gym.Env):
         return float(abs(tail.mean()))
 
     def update_obs(self) -> np.ndarray:
-        # single timestep slice: shape (n_features,)
-        feat    = self.features[self.t].numpy()                        # (n_features,)
+        feat    = self.features[self.t].numpy()
         extras  = np.array([self.prev_action, self.drawdown], dtype=np.float32)
-        return np.concatenate([feat, extras])                          # (n_features+2,)
+        return np.concatenate([feat, extras])
 
-    # ── gym interface ──────────────────────────────────────────────────────────
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -133,7 +107,6 @@ class HedgeEnv(gym.Env):
             if self.t >= self.episode_end:
                 break
 
-        # update drawdown before appending to buffer
         self._update_drawdown(reward)
 
         # CVaR penalty
@@ -145,16 +118,7 @@ class HedgeEnv(gym.Env):
         return self.update_obs(), reward * 1e4, terminated, False, {}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Eval environment
-# ─────────────────────────────────────────────────────────────────────────────
-
 class HedgeEnvEval(HedgeEnv):
-    """
-    Deterministic start (t = window-1).
-    Returns per-day reward list so post-hoc analysis is granular.
-    Inherits the same cost structure as training.
-    """
 
     def reset(self, seed=None, options=None):
         gym.Env.reset(self, seed=seed)
@@ -193,11 +157,8 @@ class HedgeEnvEval(HedgeEnv):
         return self.update_obs(), period_rew, terminated, False, {}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Training
-# ─────────────────────────────────────────────────────────────────────────────
 
-"""env = HedgeEnv(window, n_features, X_train, y_train, a_max)
+env = HedgeEnv(window, n_features, X_train, y_train, a_max)
 
 policy_kwargs = dict(
     lstm_hidden_size = 128,
@@ -218,15 +179,12 @@ model = RecurrentPPO(
     batch_size        = 64,
     ent_coef          = 0.01,
 )
-model.learn(total_timesteps=50_000, tb_log_name="hedging_lstm")
-model.save("hedging_lstm")"""
+model.learn(total_timesteps=500_000, tb_log_name="hedging_lstm")
+model.save("hedging_lstm")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Evaluation
-# ─────────────────────────────────────────────────────────────────────────────
 
 model    = RecurrentPPO.load("hedging_lstm")
-test_env = HedgeEnvEval(window, n_features, X_test, y_test, a_max)
+test_env = HedgeEnvEval(window, n_features, X_valid, y_valid, a_max)
 obs, _   = test_env.reset()
 
 done, rewards, actions, lstm_states = False, [], [], None
@@ -253,11 +211,10 @@ turnover     = np.mean(np.abs(np.diff(actions)))
 print(f"Sharpe: {sharpe:.3f}  Sortino: {sortino:.3f}  "
       f"Max DD: {max_drawdown:.3f}  CAGR: {cagr:.3f}  Turnover: {turnover:.4f}")
 
-bh_returns = y_test.numpy()
+bh_returns = y_valid.numpy()
 print("Buy & hold Sharpe:",
       np.sqrt(252) * bh_returns.mean() / (bh_returns.std() + 1e-8))
 
-# ── plots ──────────────────────────────────────────────────────────────────────
 plt.figure(figsize=(12, 4))
 plt.plot(actions)
 plt.title("Action / hedge ratio over test period")
@@ -270,7 +227,7 @@ plt.title("Equity curve, test period")
 plt.savefig("equity.png")
 plt.show()
 
-y_test_realized = y_test.numpy()[window - 1 : window - 1 + len(actions)]
+y_test_realized = y_valid.numpy()[window - 1 : window - 1 + len(actions)]
 corr = np.corrcoef(actions, y_test_realized)[0, 1]
 print("Correlation(action, forward return):", corr)
 
