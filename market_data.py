@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 ROLL_WINDOW = 504
 MIN_PERIODS = 252
 
-SPY   = yf.download("SPY",    start="2000-01-01", end="2025-12-31")
+SPY   = yf.download("ARKK",    start="2000-01-01", end="2025-12-31")
 VIX   = yf.download("^VIX",   start="2005-01-01", end="2025-12-31")
 TNX   = yf.download("^TNX",   start="2005-01-01", end="2025-12-31")
 VIX3M = yf.download("^VIX3M", start="2005-01-01", end="2025-12-31")

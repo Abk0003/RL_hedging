@@ -23,7 +23,7 @@ DD_COST_SENSITIVITY = 5.0
 
 class HedgeEnv(gym.Env):
     def __init__(self, window, n_features, features, y, a_max,
-                 lam=0, psi=1e-4, phi=0.0002):
+                 lam=0.1, psi=1e-4, phi=0.0002):
         super().__init__()
         self.window = window
         self.n_features = n_features
@@ -112,7 +112,8 @@ class HedgeEnv(gym.Env):
 
         # FIX: Reward is now active alpha minus costs (forces beating the market)
         active_return = agent_return - market_return
-        reward = active_return - ct - (self.lam * trade * action)
+        var_penalty = 0.5 * (agent_return**2)
+        reward = active_return - ct - (self.lam * trade * action) - var_penalty
 
         self._update_drawdown(reward)
 
@@ -169,7 +170,7 @@ class HedgeEnvEval(HedgeEnv):
 
 # ─── Training Block ─────────────────────────────────────────────────────────
 
-"""# FIX: Wrap environment in VecNormalize to stabilize inputs and Critic loss
+# FIX: Wrap environment in VecNormalize to stabilize inputs and Critic loss
 raw_env = HedgeEnv(window, n_features, X_train, y_train, a_max)
 env = DummyVecEnv([lambda: raw_env])
 env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.)
@@ -191,14 +192,14 @@ model = RecurrentPPO(
     n_steps=4096,
     gae_lambda=0.95,
     batch_size=128,  # FIX: Increased batch size for sequence stability
-    ent_coef=0.05,  # FIX: Increased entropy to force the agent to explore trades
+    ent_coef=0.01,  # FIX: Increased entropy to force the agent to explore trades
 )
 
-model.learn(total_timesteps=500_000, tb_log_name="hedging_lstm")
+model.learn(total_timesteps=1_000_000, tb_log_name="hedging_lstm_var")
 
 # Save model AND normalization statistics
 model.save("hedging_lstm")
-env.save("vec_normalize.pkl")"""
+env.save("vec_normalize.pkl")
 
 # ─── Evaluation Block ───────────────────────────────────────────────────────
 

@@ -158,7 +158,7 @@ class HedgeEnvEval(HedgeEnv):
 
 
 
-env = HedgeEnv(window, n_features, X_train, y_train, a_max)
+"""env = HedgeEnv(window, n_features, X_train, y_train, a_max)
 
 policy_kwargs = dict(
     lstm_hidden_size = 128,
@@ -180,7 +180,7 @@ model = RecurrentPPO(
     ent_coef          = 0.01,
 )
 model.learn(total_timesteps=500_000, tb_log_name="hedging_lstm")
-model.save("hedging_lstm")
+model.save("hedging_lstm")"""
 
 
 model    = RecurrentPPO.load("hedging_lstm")
